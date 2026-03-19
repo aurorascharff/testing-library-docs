@@ -7,6 +7,7 @@ title: API
 as these methods:
 
 - [`render`](#render)
+- [`renderAsync`](#renderasync)
 - [`render` Options](#render-options)
   - [`container`](#container)
   - [`baseElement`](#baseelement)
@@ -27,6 +28,10 @@ as these methods:
   - [`asFragment`](#asfragment)
 - [`cleanup`](#cleanup)
 - [`act`](#act)
+- [`renderAsync`](#renderasync)
+- [`renderAsync` Options](#renderasync-options)
+- [`renderAsync` Result](#renderasync-result)
+  - [`rerender`](#rerender-async)
 - [`renderHook`](#renderhook)
 - [`renderHook` Options](#renderhook-options)
   - [`initialProps`](#initialprops)
@@ -316,7 +321,8 @@ expect(firstRender).toMatchDiffSnapshot(asFragment())
 
 ## `cleanup`
 
-Unmounts React trees that were mounted with [render](#render).
+Unmounts React trees that were mounted with [render](#render) or
+[renderAsync](#renderasync).
 
 > This is called automatically if your testing framework (such as mocha, Jest or
 > Jasmine) injects a global `afterEach()` function into the testing environment.
@@ -352,6 +358,129 @@ This is a light wrapper around the
 All it does is forward all arguments to the act function if your version of
 react supports `act`. It is recommended to use the import from
 `@testing-library/react` over `react` for consistency reasons.
+
+## `renderAsync`
+
+```typescript
+function renderAsync(
+  ui: React.ReactNode,
+  options?: {
+    /* Same options as render */
+  },
+): Promise<RenderAsyncResult>
+```
+
+Render async React Server Components and components using React 19's
+[`use()`](https://react.dev/reference/react/use) hook. This function resolves
+`async function` components in the element tree before rendering, and wraps the
+result in a `Suspense` boundary with `act()` so that `use()`-based suspensions
+are properly flushed.
+
+Use `renderAsync` instead of `render` when your component tree includes:
+
+- `async function` server components (including nested and deeply nested)
+- Components that call `use(promise)` for data loading
+- Mixed trees of async server components, `use()`-based components, and regular
+  client components
+- Async components passed as non-children props (e.g. `sidebar`, `header`,
+  `fallback`) or in arrays (e.g. `tabs={[<AsyncTab />, <Tab />]}`)
+
+:::note
+
+Server-only APIs (`cookies()`, `headers()`, etc.) must be mocked in your test
+setup since tests run in a JSDOM environment, not a real server.
+
+:::
+
+```jsx
+import {renderAsync, screen} from '@testing-library/react'
+import '@testing-library/jest-dom'
+
+async function UserProfile({userId}) {
+  const user = await fetch(`/api/users/${userId}`).then(r => r.json())
+  return <div data-testid="name">{user.name}</div>
+}
+
+test('renders an async server component', async () => {
+  // mock fetch or your data layer
+  global.fetch = jest.fn().mockResolvedValue({
+    json: () => Promise.resolve({name: 'Alice'}),
+  })
+
+  await renderAsync(<UserProfile userId="1" />)
+  expect(screen.getByTestId('name')).toHaveTextContent('Alice')
+})
+```
+
+### Nested async components
+
+`renderAsync` recursively resolves all async function components in the tree,
+regardless of nesting depth:
+
+```jsx
+async function Layout() {
+  return (
+    <main>
+      <Header />
+    </main>
+  )
+}
+
+async function Header() {
+  const config = await getConfig()
+  return <h1>{config.title}</h1>
+}
+
+test('resolves deeply nested async components', async () => {
+  await renderAsync(<Layout />)
+  expect(screen.getByRole('heading')).toHaveTextContent('My App')
+})
+```
+
+### With `use()` hook
+
+Components that call `use()` to unwrap a promise are supported. Pass the promise
+as a prop to ensure a stable reference:
+
+```jsx
+import {use} from 'react'
+
+function UserName({dataPromise}) {
+  const user = use(dataPromise)
+  return <span>{user.name}</span>
+}
+
+test('renders component using use()', async () => {
+  const dataPromise = Promise.resolve({name: 'Alice'})
+  await renderAsync(<UserName dataPromise={dataPromise} />)
+  expect(screen.getByText('Alice')).toBeInTheDocument()
+})
+```
+
+## `renderAsync` Options
+
+`renderAsync` accepts the same options as [`render`](#render-options)
+(`container`, `baseElement`, `hydrate`, `wrapper`, `queries`, etc.).
+
+## `renderAsync` Result
+
+`renderAsync` returns a `Promise` that resolves to the same result object as
+[`render`](#render-result) (`...queries`, `container`, `baseElement`, `debug`,
+`unmount`, `asFragment`), with one difference:
+
+### `rerender` {#rerender-async}
+
+The `rerender` function returned by `renderAsync` is **async** and also resolves
+async components before re-rendering:
+
+```jsx
+const {rerender} = await renderAsync(<UserProfile userId="1" />)
+
+// re-render with different props
+await rerender(<UserProfile userId="2" />)
+```
+
+---
 
 ## `renderHook`
 
